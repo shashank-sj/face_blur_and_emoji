@@ -1,32 +1,39 @@
-from ultralytics.trackers.byte_tracker import BYTETracker
-import numpy as np
-
-
 class Tracker:
-    def __init__(self, fps=30):
-        self.tracker = BYTETracker(
-            track_thresh=0.4,
-            match_thresh=0.8,
-            frame_rate=fps
-        )
-
-    def update(self, detections):
+    def __init__(self, yolo_model):
         """
         Args:
-            detections: List of [x1, y1, x2, y2, conf]
+            yolo_model: ultralytics.YOLO instance
+        """
+        self.model = yolo_model
+
+    def update(self, frame):
+        """
+        Args:
+            frame (np.ndarray)
 
         Returns:
-            List of [x1, y1, x2, y2, track_id]
+            List of [x1, y1, x2, y2, track_id, conf]
         """
-        if len(detections) == 0:
-            return []
+        results = self.model.track(
+            frame,
+            persist=True,
+            conf=0.4,
+            iou=0.5,
+            verbose=False
+        )
 
-        dets = np.array(detections)
-        tracks = self.tracker.update(dets, None)
+        tracks = []
 
-        results = []
-        for t in tracks:
-            x1, y1, x2, y2, track_id = t[:5]
-            results.append([x1, y1, x2, y2, int(track_id)])
+        for r in results:
+            if r.boxes is None or r.boxes.id is None:
+                continue
 
-        return results
+            boxes = r.boxes.xyxy.cpu().numpy()
+            ids = r.boxes.id.cpu().numpy()
+            confs = r.boxes.conf.cpu().numpy()
+
+            for box, tid, conf in zip(boxes, ids, confs):
+                x1, y1, x2, y2 = box
+                tracks.append([x1, y1, x2, y2, int(tid), float(conf)])
+
+        return tracks
