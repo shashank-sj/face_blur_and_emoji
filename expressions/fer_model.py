@@ -1,28 +1,54 @@
 import torch
+import torch.nn as nn
 import cv2
 import numpy as np
 
 
+# -----------------------------
+# SAME model architecture used in training
+# -----------------------------
+class SimpleFER(nn.Module):
+    def __init__(self):
+        super().__init__()
+
+        self.net = nn.Sequential(
+            nn.Conv2d(1, 32, 3, padding=1),
+            nn.ReLU(),
+            nn.MaxPool2d(2),
+
+            nn.Conv2d(32, 64, 3, padding=1),
+            nn.ReLU(),
+            nn.MaxPool2d(2),
+
+            nn.Conv2d(64, 128, 3, padding=1),
+            nn.ReLU(),
+            nn.AdaptiveAvgPool2d((1, 1))
+        )
+
+        self.fc = nn.Linear(128, 7)
+
+    def forward(self, x):
+        x = self.net(x)
+        x = x.view(x.size(0), -1)
+        return self.fc(x)
+
+
+# -----------------------------
+# Inference wrapper
+# -----------------------------
 class FERModel:
-    def __init__(self, device=None):
-        """
-        Loads pretrained FER ResNet18 via torch.hub
-        """
+    def __init__(self, weights_path="weights/fer_simple.pt", device=None):
         if device is None:
             device = "cuda" if torch.cuda.is_available() else "cpu"
 
         self.device = device
 
-        # Load pretrained FER model
-        self.model = torch.hub.load(
-            "nateraw/fer",
-            "resnet18",
-            pretrained=True
-        ).to(device)
-
+        self.model = SimpleFER().to(device)
+        self.model.load_state_dict(
+            torch.load(weights_path, map_location=device)
+        )
         self.model.eval()
 
-        # Label order used by this model
         self.labels = [
             "angry",
             "disgust",
@@ -34,33 +60,18 @@ class FERModel:
         ]
 
     def preprocess(self, face_bgr):
-        """
-        Input: BGR face crop
-        Output: normalized tensor [1, 3, 224, 224]
-        """
         if face_bgr is None or face_bgr.size == 0:
             return None
 
-        face_rgb = cv2.cvtColor(face_bgr, cv2.COLOR_BGR2RGB)
-        face_rgb = cv2.resize(face_rgb, (224, 224))
+        gray = cv2.cvtColor(face_bgr, cv2.COLOR_BGR2GRAY)
+        gray = cv2.resize(gray, (48, 48))
 
-        tensor = torch.from_numpy(face_rgb).float()
-        tensor = tensor.permute(2, 0, 1) / 255.0
+        img = gray.astype(np.float32) / 255.0
+        img = torch.from_numpy(img).unsqueeze(0).unsqueeze(0)
 
-        # ImageNet normalization (important!)
-        mean = torch.tensor([0.485, 0.456, 0.406]).view(3, 1, 1)
-        std  = torch.tensor([0.229, 0.224, 0.225]).view(3, 1, 1)
-
-        tensor = (tensor - mean) / std
-
-        return tensor.unsqueeze(0).to(self.device)
+        return img.to(self.device)
 
     def predict(self, face_bgr):
-        """
-        Returns:
-            expression (str)
-            confidence (float)
-        """
         tensor = self.preprocess(face_bgr)
         if tensor is None:
             return "neutral", 0.0
@@ -69,7 +80,13 @@ class FERModel:
             logits = self.model(tensor)
             probs = torch.softmax(logits, dim=1)[0]
 
-        idx = torch.argmax(probs).item()
-        confidence = probs[idx].item()
+        conf, idx = torch.max(probs, dim=0)
 
-        return self.labels[idx], confidence
+        expr = self.labels[idx.item()]
+        confidence = conf.item()
+
+        # Confidence gating (VERY important)
+        if confidence < 0.5:
+            return "neutral", confidence
+
+        return expr, confidence

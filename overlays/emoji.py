@@ -1,19 +1,19 @@
 import cv2
 
-EMOJI_PATHS = {
+EMOJI_MAP = {
     "happy": "assets/emojis/happy.png",
     "sad": "assets/emojis/sad.png",
     "angry": "assets/emojis/angry.png",
+    "surprise": "assets/emojis/surprise.png",
     "neutral": "assets/emojis/neutral.png",
-    "surprise": "assets/emojis/surprise.png"
 }
 
 
 def overlay_emoji(frame, bbox, emotion):
-    if emotion not in EMOJI_PATHS:
+    if emotion not in EMOJI_MAP:
         emotion = "neutral"
 
-    emoji = cv2.imread(EMOJI_PATHS[emotion], cv2.IMREAD_UNCHANGED)
+    emoji = cv2.imread(EMOJI_MAP[emotion], cv2.IMREAD_UNCHANGED)
     if emoji is None:
         return
 
@@ -25,4 +25,11 @@ def overlay_emoji(frame, bbox, emotion):
     y = max(0, y1 - size)
     x = max(0, x1)
 
-    frame[y:y+size, x:x+size] = emoji[:, :, :3]
+    h, w = emoji.shape[:2]
+
+    alpha = emoji[:, :, 3] / 255.0
+    for c in range(3):
+        frame[y:y+h, x:x+w, c] = (
+            alpha * emoji[:, :, c]
+            + (1 - alpha) * frame[y:y+h, x:x+w, c]
+        )
